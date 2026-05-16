@@ -35,7 +35,7 @@ public static class JsonUtils
     {
         if (!File.Exists(path))
         {
-            value = default;
+            value = null;
             return false;
         }
         
@@ -126,18 +126,18 @@ public static class JsonUtils
                 {
                     case ('"',  _,     false): inQuotes = !inQuotes; break;
                     case ('"',  _,     _    ): slash = false; break;
-                    case (']',  false, _    ): goto quit;
-                    case ('}',  false, _    ): goto quit;
-                    case (',',  false, _    ): goto quit;
+                    case (']',  false, _    ):
+                    case ('}',  false, _    ):
+                    case (',',  false, _    ):
                     case (':',  false, _    ): goto quit;
-                    case (' ',  false, _    ): goto next;
-                    case ('\n', false, _    ): goto next;
-                    case ('\r', false, _    ): goto next;
+                    case (' ',  false, _    ):
+                    case ('\n', false, _    ):
+                    case ('\r', false, _    ):
                     case ('\t', false, _    ): goto next;
                     case ('\\', _,     false): slash = true; goto next;
-                    case ('n',  _,     true ): slash = false; _stringBuilder.Append("\\"); break; 
-                    case ('r',  _,     true ): slash = false; _stringBuilder.Append("\\"); break; 
-                    case ('t',  _,     true ): slash = false; _stringBuilder.Append("\\"); break; 
+                    case ('n',  _,     true ):
+                    case ('r',  _,     true ):
+                    case ('t',  _,     true ): slash = false; _stringBuilder.Append("\\"); break;
                     case (_,    _,     true ): slash = false; break;
                 }
                 _stringBuilder.Append(c);
@@ -152,8 +152,9 @@ public static class JsonUtils
 
         private object GetObjectFromJson(char[] json, Type type)
         {
-            if (json.Length is 0)
-                return default;
+            if (json.Length is 0 ||
+                IsNull(json, _index))
+                return null;
 
             var instance = Activator.CreateInstance(type);
             var state = State.Default;
@@ -165,12 +166,12 @@ public static class JsonUtils
                var c = json[_index];
                 switch (c, state)
                 {
-                    case ('{',   State.Default  ): _index++; state = State.WaitName; continue;
+                    case ('{',   State.Default  ):
                     case (',',   State.Default  ): _index++; state = State.WaitName; continue;
                     case ('}',   State.WaitName ): _index++; return instance;
-                    case (' ',   State.WaitName ): _index++; continue;
-                    case ('\n',  State.WaitName ): _index++; continue;
-                    case ('\r',  State.WaitName ): _index++; continue;
+                    case (' ',   State.WaitName ):
+                    case ('\n',  State.WaitName ):
+                    case ('\r',  State.WaitName ):
                     case ('\t',  State.WaitName ): _index++; continue;
                     case ('"',   State.WaitName ): _index++; state = State.ReadName;   continue;
                     case (_,     State.WaitName ): _index++; state = State.ReadName; _stringBuilder.Append(c); continue;
@@ -291,12 +292,11 @@ public static class JsonUtils
         {
             var dictionary = (IDictionary)Activator.CreateInstance(type);
                 
-            if (json.Length is 0)
+            if (json.Length is 0 ||
+                (json.Length > _index && json[_index] is '[' && json[_index + 1] is ']') ||
+                IsNull(json, _index))
                 return dictionary;
 
-            if (IsNull(json, _index))
-                return dictionary;
-            
             var genericTypeArguments = type.GenericTypeArguments.Length switch
             {
                 < 2 => type.GetInterfaces().FirstOrDefault(x => x.IsGenericType && x.Name == nameof(IDictionary) + "`2")?.GenericTypeArguments,
@@ -314,7 +314,7 @@ public static class JsonUtils
                 {
                     case ('{', null): _index++; continue;
                     case ('"', null): key = FromJsonPrivate(json, keyType); break;
-                    case (':', _): _index++; continue;
+                    case (':', _):
                     case (',', _): _index++; continue;
                     case ('}', _): _index++; return dictionary;
                     case (_, not null): dictionary.Add(key, FromJsonPrivate(json, valueType)); key = null; continue;
@@ -330,11 +330,12 @@ public static class JsonUtils
             var list = new List<object>();
             var elementType = type.IsArray ? type.GetElementType() : type.GenericTypeArguments.FirstOrDefault();
             
-            if (elementType is null)
+            if (elementType is null ||
+                IsNull(json, _index))
                 return Array.Empty<object>();
-
-            if (IsNull(json, _index))
-                return Array.Empty<object>();
+            
+            if (json.Length > _index && json[_index] is '[' && json[_index + 1] is ']')
+                return Array.CreateInstance(elementType, 0);
             
             var inBrackets = false;
             
@@ -342,15 +343,15 @@ public static class JsonUtils
             {
                 switch (json[_index], isInBreckets: inBrackets)
                 {
-                    case (' ',  _    ): _index++; continue;
-                    case ('\n', _    ): _index++; continue;
-                    case ('\r', _    ): _index++; continue;
+                    case (' ',  _    ):
+                    case ('\n', _    ):
+                    case ('\r', _    ):
                     case ('\t', _    ): _index++; continue;
                     case ('[',  false): _index++; inBrackets = true; continue;
                     case (',',  _    ): _index++; continue;
-                    case (']',  _    ): _index++; goto quit;
-                    case ('"',  false) when IsNull(json.Skip(_index + 1).Take(4)): _index++; goto quit;
-                    case ('n',  false) when IsNull(json.Skip(_index).Take(4)):     _index++; goto quit;
+                    case (']',  _    ):
+                    case ('"',  false) when IsNull(json.Skip(_index + 1).Take(4)):
+                    case ('n',  false) when IsNull(json.Skip(_index)    .Take(4)): _index++; goto quit;
                     default: list.Add(FromJsonPrivate(json, elementType)); break;
                 }
             }
@@ -388,7 +389,7 @@ public static class JsonUtils
         private static object GetNullableValueFromJson(string json, Type type) => IsNullableType(type)
             ? json is not (null or "null" or "")
                 ? GetValueFromJson(json, type.GenericTypeArguments[0])
-                : default
+                : null
             : GetValueFromJson(json, type);
 
         private static object GetValueFromJson(string json, Type type) =>
@@ -401,21 +402,21 @@ public static class JsonUtils
         private static Dictionary<Type, Func<string, object>> _parseDictionary;
         private static Dictionary<Type, Func<string, object>> ParseDictionary => _parseDictionary ??= new Dictionary<Type, Func<string, object>>
         {
-            [typeof(bool)]     = json => bool   .TryParse(json.Trim(Quote), out var value) ? value : default,
-            [typeof(byte)]     = json => byte   .TryParse(json.Trim(Quote), out var value) ? value : default,
-            [typeof(sbyte)]    = json => sbyte  .TryParse(json.Trim(Quote), out var value) ? value : default,
-            [typeof(char)]     = json => char   .TryParse(json.Trim(Quote), out var value) ? value : default,
-            [typeof(decimal)]  = json => decimal.TryParse(json.Trim(Quote), NumberStyles.Any, CultureInfo.InvariantCulture, out var value) ? value : default,
-            [typeof(double)]   = json => double .TryParse(json.Trim(Quote), NumberStyles.Any, CultureInfo.InvariantCulture, out var value) ? value : default,
-            [typeof(float)]    = json => float  .TryParse(json.Trim(Quote), NumberStyles.Any, CultureInfo.InvariantCulture, out var value) ? value : default,
-            [typeof(int)]      = json => int    .TryParse(json.Trim(Quote), out var value) ? value : default,
-            [typeof(uint)]     = json => uint   .TryParse(json.Trim(Quote), out var value) ? value : default,
-            [typeof(long)]     = json => long   .TryParse(json.Trim(Quote), out var value) ? value : default,
-            [typeof(ulong)]    = json => ulong  .TryParse(json.Trim(Quote), out var value) ? value : default,
-            [typeof(short)]    = json => short  .TryParse(json.Trim(Quote), out var value) ? value : default,
-            [typeof(ushort)]   = json => ushort .TryParse(json.Trim(Quote), out var value) ? value : default,
+            [typeof(bool)]     = json => bool   .TryParse(json.Trim(Quote), out var value) && value,
+            [typeof(byte)]     = json => byte   .TryParse(json.Trim(Quote), out var value) ? value : 0,
+            [typeof(sbyte)]    = json => sbyte  .TryParse(json.Trim(Quote), out var value) ? value : 0,
+            [typeof(char)]     = json => char   .TryParse(json.Trim(Quote), out var value) ? value : '\0',
+            [typeof(decimal)]  = json => decimal.TryParse(json.Trim(Quote), NumberStyles.Any, CultureInfo.InvariantCulture, out var value) ? value : 0,
+            [typeof(double)]   = json => double .TryParse(json.Trim(Quote), NumberStyles.Any, CultureInfo.InvariantCulture, out var value) ? value : 0,
+            [typeof(float)]    = json => float  .TryParse(json.Trim(Quote), NumberStyles.Any, CultureInfo.InvariantCulture, out var value) ? value : 0,
+            [typeof(int)]      = json => int    .TryParse(json.Trim(Quote), out var value) ? value : 0,
+            [typeof(uint)]     = json => uint   .TryParse(json.Trim(Quote), out var value) ? value : 0,
+            [typeof(long)]     = json => long   .TryParse(json.Trim(Quote), out var value) ? value : 0,
+            [typeof(ulong)]    = json => ulong  .TryParse(json.Trim(Quote), out var value) ? value : 0,
+            [typeof(short)]    = json => short  .TryParse(json.Trim(Quote), out var value) ? value : 0,
+            [typeof(ushort)]   = json => ushort .TryParse(json.Trim(Quote), out var value) ? value : 0,
             [typeof(string)]   = json => json is null or "null" or "" ? null : TrimQuotesOneTime(json),
-            [typeof(Guid)]     = json => Guid   .TryParse(json.Trim(Quote), out var value) ? value : default,
+            [typeof(Guid)]     = json => Guid   .TryParse(json.Trim(Quote), out var value) ? value : Guid.Empty,
         };
 
         private static string TrimQuotesOneTime(string value)
@@ -448,7 +449,7 @@ public static class JsonUtils
         }
 
         private static TimeSpan GetTimeSpanFromJson(string json) =>
-            TimeSpan.TryParse(json.Trim(Quote), out var value) ? value : new TimeSpan();
+            TimeSpan.TryParse(json.Trim(Quote), out var value) ? value : TimeSpan.Zero;
         
         private static bool IsNullableType(Type type) => IsGenericType(type, typeof(Nullable<>));
         private static bool IsGenericType(Type type, Type genericType) => type.IsGenericType && type.GetGenericTypeDefinition() == genericType;
@@ -478,11 +479,13 @@ public static class JsonUtils
                 case IEnumerable enumerable: return new JsonWriter(_ignoreNullOrDefaultValues).ToJson(enumerable);
             }
 
+            var isAnonymousType = IsAnonymousType(type);
+
             _stringBuilder.Append("{");
             
             foreach (var property in type.GetProperties(BindingFlags.Public | BindingFlags.Instance))
             {
-                if (!property.CanWrite) continue;
+                if (!property.CanWrite && !isAnonymousType) continue;
                 var value = property.GetValue(obj);
                 if (_ignoreNullOrDefaultValues && (value is null || IsDefaultValue(property.PropertyType, value))) continue;
                 _stringBuilder.Append("\"");
@@ -592,5 +595,137 @@ public static class JsonUtils
             _stringBuilder.Append("}");
             return _stringBuilder.ToString();
         }
+
+        private static bool IsAnonymousType(Type type) => 
+            type is not null &&
+            type.Name.StartsWith("<>f__AnonymousType") && 
+            type.GetCustomAttributes(typeof(CompilerGeneratedAttribute), false).Length > 0 &&
+            (type.Namespace is null || type.Namespace.Contains("AnonymousType")) &&
+            type.GetProperties().All(p => p.CanRead) &&
+            type.GetProperties().All(p => !p.CanWrite);
+    }
+
+    public static string FormatJson(string json)
+    {
+        if (json is null || string.IsNullOrWhiteSpace(json))
+            return "";
+        
+        var result = new StringBuilder();
+        var indent = 0;
+        var inQuotes = false;
+        var escapeNext = false;
+
+        foreach (var c in json)
+        {
+            if (escapeNext)
+            {
+                result.Append(c);
+                escapeNext = false;
+                continue;
+            }
+
+            switch (c)
+            {
+                case '\\':
+                    result.Append(c);
+                    escapeNext = true;
+                    continue;
+                
+                case '"':
+                    inQuotes = !inQuotes;
+                    result.Append(c);
+                    continue;
+            }
+
+            if (inQuotes)
+            {
+                result.Append(c);
+                continue;
+            }
+
+            switch (c)
+            {
+                case '{':
+                case '[':
+                    result.Append(c);
+                    result.AppendLine();
+                    indent++;
+                    result.Append(new string(' ', indent * 2));
+                    break;
+
+                case '}':
+                case ']':
+                    result.AppendLine();
+                    indent--;
+                    result.Append(new string(' ', indent * 2));
+                    result.Append(c);
+                    break;
+
+                case ',':
+                    result.Append(c);
+                    result.AppendLine();
+                    result.Append(new string(' ', indent * 2));
+                    break;
+
+                case ':':
+                    result.Append(c);
+                    result.Append(' ');
+                    break;
+
+                case ' ':
+                case '\t':
+                case '\r':
+                case '\n':
+                    break;
+
+                default:
+                    result.Append(c);
+                    break;
+            }
+        }
+
+        return result.ToString();
+    }
+    
+    public static bool IsJson(string value)
+    {
+        if (value is null)
+            return false;
+
+        value = value.Trim();
+
+        if ((!value.StartsWith("[") || !value.EndsWith("]")) &&
+            (!value.StartsWith("{") || !value.EndsWith("}")))
+            return false;
+
+        var symbols = new Stack<char>();
+        var containsCurlyBracket = false;
+
+        foreach (var c in value)
+        {
+            switch (c)
+            {
+                case '{':
+                    containsCurlyBracket = true;
+                    symbols.Push(c);
+                    break;
+
+                case '[':
+                    symbols.Push(c);
+                    break;
+
+                case ']':
+                    if (symbols.Pop() != '[')
+                        return false;
+                    break;
+
+                case '}':
+                    if (symbols.Pop() != '{')
+                        return false;
+                    break;
+            }
+        }
+
+        return containsCurlyBracket && symbols.Count is 0;
     }
 }
